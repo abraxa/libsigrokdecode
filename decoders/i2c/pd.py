@@ -112,9 +112,11 @@ class Decoder(srd.Decoder):
         self.samplerate = None
         self.ss = self.es = self.ss_byte = -1
         self.samplenum = None
+        self.packetnum = 0
         self.bitcount = 0
         self.databyte = 0
         self.wr = -1
+        self.datacount = 0
         self.is_repeat_start = 0
         self.state = 'FIND START'
         self.oldscl = self.oldsda = 1
@@ -133,6 +135,7 @@ class Decoder(srd.Decoder):
         self.out_binary = self.register(srd.OUTPUT_BINARY)
         self.out_bitrate = self.register(srd.OUTPUT_META,
                 meta=(int, 'Bitrate', 'Bitrate from Start bit to Stop bit'))
+        self.out_packet = self.register(srd.OUTPUT_PACKET)
 
     def putx(self, data):
         self.put(self.ss, self.es, self.out_ann, data)
@@ -142,6 +145,14 @@ class Decoder(srd.Decoder):
 
     def putb(self, data):
         self.put(self.ss, self.es, self.out_binary, data)
+
+    def putlocation(self, ann):
+        self.put(self.pdu_start, self.es, self.out_packet,
+            [ann, srd.SRD_PACKET_LOCATION, self.packetnum])
+
+    def putfield(self, ann, name, value):
+        self.put(self.ss, self.es, self.out_packet,
+            [ann, srd.SRD_PACKET_FIELD, self.packetnum, name, value])
 
     def is_start_condition(self, scl, sda):
         # START condition (S): SDA = falling, SCL = high
@@ -162,6 +173,11 @@ class Decoder(srd.Decoder):
         return False
 
     def found_start(self, scl, sda):
+
+        if self.is_repeat_start == 1:
+            self.putlocation(proto['START'][0])
+            self.packetnum += 1
+
         self.ss, self.es = self.samplenum, self.samplenum
         self.pdu_start = self.samplenum
         self.pdu_bits = 0
@@ -169,7 +185,7 @@ class Decoder(srd.Decoder):
         self.putp([cmd, None])
         self.putx([proto[cmd][0], proto[cmd][1:]])
         self.state = 'FIND ADDRESS'
-        self.bitcount = self.databyte = 0
+        self.bitcount = self.databyte = self.datacount = 0
         self.is_repeat_start = 1
         self.wr = -1
         self.bits = []
@@ -238,6 +254,15 @@ class Decoder(srd.Decoder):
         self.putx([proto[cmd][0], ['%s: %02X' % (proto[cmd][1], d),
                    '%s: %02X' % (proto[cmd][2], d), '%02X' % d]])
 
+        self.putfield(proto[cmd][0], 'R/W', 'Write' if self.wr else 'Read')
+
+        if cmd.startswith('ADDRESS'):
+            self.putfield(proto[cmd][0], 'Address', str(d))
+        else:
+            self.putfield(proto[cmd][0], 'Data%d' % self.datacount, str(d))
+            self.putfield(proto[cmd][0], 'Datacount', str(self.datacount + 1))
+            self.datacount += 1
+
         # Done with this packet.
         self.bitcount = self.databyte = 0
         self.bits = []
@@ -262,6 +287,9 @@ class Decoder(srd.Decoder):
         self.ss, self.es = self.samplenum, self.samplenum
         self.putp([cmd, None])
         self.putx([proto[cmd][0], proto[cmd][1:]])
+        self.putlocation(proto[cmd][0])
+        self.packetnum += 1
+
         self.state = 'FIND START'
         self.is_repeat_start = 0
         self.wr = -1

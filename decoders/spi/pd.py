@@ -125,6 +125,7 @@ class Decoder(srd.Decoder):
         self.mosibits = []
         self.ss_block = -1
         self.samplenum = -1
+        self.packetnum = 0
         self.cs_was_deasserted = False
         self.oldcs = None
         self.oldpins = None
@@ -141,6 +142,7 @@ class Decoder(srd.Decoder):
         self.out_bin = self.register(srd.OUTPUT_BINARY)
         self.out_bitrate = self.register(srd.OUTPUT_META,
                 meta=(int, 'Bitrate', 'Bitrate during transfers'))
+        self.out_packet = self.register(srd.OUTPUT_PACKET)
 
     def putw(self, data):
         self.put(self.ss_block, self.samplenum, self.out_ann, data)
@@ -175,6 +177,18 @@ class Decoder(srd.Decoder):
             self.put(ss, es, self.out_ann, [0, ['%02X' % self.misodata]])
         if self.have_mosi:
             self.put(ss, es, self.out_ann, [1, ['%02X' % self.mosidata]])
+
+        # Packet location and fields
+        self.put(ss, es, self.out_packet,
+            [4, srd.SRD_PACKET_LOCATION, self.packetnum])
+
+        if self.have_miso:
+            self.put(ss, es, self.out_packet,
+                [4, srd.SRD_PACKET_FIELD, self.packetnum, 'MISOData', str(self.misodata)])
+
+        if self.have_mosi:
+            self.put(ss, es, self.out_packet,
+                [4, srd.SRD_PACKET_FIELD, self.packetnum, 'MOSIData', str(self.mosidata)])
 
     def reset_decoder_state(self):
         self.misodata = 0 if self.have_miso else None
@@ -233,6 +247,8 @@ class Decoder(srd.Decoder):
             return
 
         self.putdata()
+
+        self.packetnum += 1
 
         # Meta bitrate.
         elapsed = 1 / float(self.samplerate)

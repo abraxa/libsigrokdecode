@@ -158,9 +158,20 @@ class Decoder(srd.Decoder):
         s, halfbit = self.startsample[rxtx], int(self.bit_width / 2)
         self.put(s - halfbit, self.samplenum + halfbit, self.out_bin, data)
 
+    def putlocation(self, rxtx):
+        s, halfbit = self.frame_start[rxtx], int(self.bit_width / 2)
+        self.put(s, self.samplenum + halfbit, self.out_packet,
+            [rxtx, srd.SRD_PACKET_LOCATION, self.packetnum])
+
+    def putfield(self, rxtx, name, value):
+        s, halfbit = self.frame_start[rxtx], int(self.bit_width / 2)
+        self.put(s, self.samplenum + halfbit, self.out_packet,
+            [rxtx, srd.SRD_PACKET_FIELD, self.packetnum, name, value])
+
     def __init__(self, **kwargs):
         self.samplerate = None
         self.samplenum = 0
+        self.packetnum = 0
         self.frame_start = [-1, -1]
         self.startbit = [-1, -1]
         self.cur_data_bit = [0, 0]
@@ -177,6 +188,7 @@ class Decoder(srd.Decoder):
         self.out_python = self.register(srd.OUTPUT_PYTHON)
         self.out_bin = self.register(srd.OUTPUT_BINARY)
         self.out_ann = self.register(srd.OUTPUT_ANN)
+        self.out_packet = self.register(srd.OUTPUT_PACKET)
 
     def metadata(self, key, value):
         if key == srd.SRD_CONF_SAMPLERATE:
@@ -267,6 +279,8 @@ class Decoder(srd.Decoder):
         self.putpx(rxtx, ['DATA', rxtx,
             (self.databyte[rxtx], self.databits[rxtx])])
 
+        self.putfield(rxtx, 'Data', str(self.databyte[rxtx]))
+
         b, f = self.databyte[rxtx], self.options['format']
         if f == 'ascii':
             c = chr(b) if b in range(30, 126 + 1) else '[%02X]' % b
@@ -328,6 +342,11 @@ class Decoder(srd.Decoder):
 
         self.putp(['STOPBIT', rxtx, self.stopbit1[rxtx]])
         self.putg([rxtx + 4, ['Stop bit', 'Stop', 'T']])
+
+        self.putlocation(rxtx)
+        self.packetnum += 1
+
+        self.packet_start = 0
 
     def decode(self, ss, es, data):
         if not self.samplerate:
