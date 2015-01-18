@@ -130,6 +130,12 @@ enum srd_output_type {
 	SRD_OUTPUT_PYTHON,
 	SRD_OUTPUT_BINARY,
 	SRD_OUTPUT_META,
+	SRD_OUTPUT_PACKET,
+};
+
+enum srd_packet_output_type {
+	SRD_PACKET_LOCATION = 10000,
+	SRD_PACKET_FIELD
 };
 
 enum srd_configkey {
@@ -255,6 +261,14 @@ struct srd_proto_data_binary {
 	int bin_class;
 	uint64_t size;
 	const unsigned char *data;
+};
+struct srd_proto_data_packet {
+	int ann_class;
+	int packet_output_type;
+	int packet_num;
+	/* Only used for SRD_PACKET_FIELD. */
+	char *field_name;
+	char *field_value;
 };
 
 typedef void (*srd_pd_output_callback)(struct srd_proto_data *pdata,

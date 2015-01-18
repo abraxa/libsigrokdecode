@@ -32,6 +32,7 @@ static const char *OUTPUT_TYPES[] = {
 	"OUTPUT_PYTHON",
 	"OUTPUT_BINARY",
 	"OUTPUT_META",
+	"OUTPUT_PACKET",
 };
 
 static int convert_annotation(struct srd_decoder_inst *di, PyObject *obj,
@@ -195,6 +196,130 @@ static int convert_meta(struct srd_proto_data *pdata, PyObject *obj)
 	return SRD_OK;
 }
 
+static int convert_packet(struct srd_decoder_inst *di, struct srd_proto_data *pdata, PyObject *obj)
+{
+	PyObject *py_tmp;
+	struct srd_pd_output *pdo;
+	struct srd_proto_data_packet *pdp;
+	int ann_class, packet_output_type;
+
+	int packet_num = 0;
+	char *field_name = NULL;
+	char *field_value = NULL;
+
+	/* Allowed parameters (start sample and end sample are already evaluated):
+	 * SRD_PACKET_LOCATION: [annotation class, packet output type, packet num]
+	 * SRD_PACKET_FIELD:    [annotation class, packet output type, packet num,
+	 *                       field name, field value]
+	 */
+
+	/* Should be a list. */
+	if (!PyList_Check(obj)) {
+		srd_err("Protocol decoder %s submitted %s instead of list.",
+			di->decoder->name, obj->ob_type->tp_name);
+		return SRD_ERR_PYTHON;
+	}
+
+	/*
+	 * The first element should be an integer matching a previously
+	 * registered annotation class.
+	 */
+	py_tmp = PyList_GetItem(obj, 0);
+	if (!PyLong_Check(py_tmp)) {
+		srd_err("Protocol decoder %s submitted packet output list, but "
+			"first element was not an integer.", di->decoder->name);
+		return SRD_ERR_PYTHON;
+	}
+	ann_class = PyLong_AsLong(py_tmp);
+	if (!(pdo = g_slist_nth_data(di->decoder->annotations, ann_class))) {
+		srd_err("Protocol decoder %s submitted data to unregistered "
+			"annotation class %d.", di->decoder->name, ann_class);
+		return SRD_ERR_PYTHON;
+	}
+
+	/* Second element must be a packet output type. */
+	py_tmp = PyList_GetItem(obj, 1);
+	if (!PyLong_Check(py_tmp)) {
+		srd_err("Protocol decoder %s submitted packet output list, but "
+			"second element was not an int.", di->decoder->name);
+		return SRD_ERR_PYTHON;
+	}
+	packet_output_type = PyLong_AsLong(py_tmp);
+
+	switch (packet_output_type) {
+	case SRD_PACKET_LOCATION:
+		/* List should have 3 elements. */
+		if (PyList_Size(obj) != 3) {
+			srd_err("Protocol decoder %s submitted SRD_PACKET_LOCATION list with "
+				"%d elements instead of 3", di->decoder->name,
+				PyList_Size(obj));
+			return SRD_ERR_PYTHON;
+		}
+
+		py_tmp = PyList_GetItem(obj, 2);
+		if (!PyLong_Check(py_tmp)) {
+			srd_err("Protocol decoder %s submitted SRD_PACKET_LOCATION list, but "
+				"third element was not an int.", di->decoder->name);
+			return SRD_ERR_PYTHON;
+		}
+		packet_num = PyLong_AsLong(py_tmp);
+		break;
+	case SRD_PACKET_FIELD:
+		/* List should have 5 elements. */
+		if (PyList_Size(obj) != 5) {
+			srd_err("Protocol decoder %s submitted SRD_PACKET_FIELD list with "
+				"%d elements instead of 5", di->decoder->name,
+				PyList_Size(obj));
+			return SRD_ERR_PYTHON;
+		}
+
+		py_tmp = PyList_GetItem(obj, 2);
+		if (!PyLong_Check(py_tmp)) {
+			srd_err("Protocol decoder %s submitted SRD_PACKET_FIELD list, but "
+				"third element was not an int.", di->decoder->name);
+			return SRD_ERR_PYTHON;
+		}
+		packet_num = PyLong_AsLong(py_tmp);
+
+		py_tmp = PyList_GetItem(obj, 3);
+		if (!PyUnicode_Check(py_tmp)) {
+			srd_err("Protocol decoder %s submitted SRD_PACKET_FIELD list, but "
+				"fourth element was not a string.", di->decoder->name);
+			return SRD_ERR_PYTHON;
+		}
+		py_tmp = PyUnicode_AsASCIIString(py_tmp);
+		field_name = g_strdup(PyBytes_AsString(py_tmp));
+		Py_XDECREF(py_tmp);
+
+		py_tmp = PyList_GetItem(obj, 4);
+		if (!PyUnicode_Check(py_tmp)) {
+			srd_err("Protocol decoder %s submitted SRD_PACKET_FIELD list, but "
+				"fifth element was not a string.", di->decoder->name);
+			return SRD_ERR_PYTHON;
+		}
+		py_tmp = PyUnicode_AsASCIIString(py_tmp);
+		field_value = g_strdup(PyBytes_AsString(py_tmp));
+		Py_XDECREF(py_tmp);
+		break;
+	default:
+		srd_err("Protocol decoder %s submitted invalid sub type %d for "
+			"SRD_OUTPUT_PACKET output type.", di->decoder->name,
+			packet_output_type);
+		return SRD_ERR_PYTHON;
+	}
+
+	pdp = g_malloc(sizeof(struct srd_proto_data_packet));
+	pdp->ann_class = ann_class;
+	pdp->packet_output_type = packet_output_type;
+	pdp->packet_num = packet_num;
+	pdp->field_name = field_name;
+	pdp->field_value = field_value;
+
+	pdata->data = pdp;
+
+	return SRD_OK;
+}
+
 static PyObject *Decoder_put(PyObject *self, PyObject *args)
 {
 	GSList *l;
@@ -287,6 +412,30 @@ static PyObject *Decoder_put(PyObject *self, PyObject *args)
 		if ((cb = srd_pd_output_callback_find(di->sess, pdo->output_type))) {
 			/* Annotations need converting from PyObject. */
 			if (convert_meta(pdata, py_data) != SRD_OK) {
+				/* An exception was already set up. */
+				break;
+			}
+			cb->cb(pdata, cb->cb_data);
+		}
+		break;
+	case SRD_OUTPUT_PACKET:
+		/* Packets go up the decoder stack and are also sent to the frontend. */
+		for (l = di->next_di; l; l = l->next) {
+			next_di = l->data;
+			srd_spew("Sending packet %d-%d to instance %s",
+					start_sample, end_sample, next_di->inst_id);
+			if (!(py_res = PyObject_CallMethod(
+				next_di->py_inst, "decode", "KKO", start_sample,
+				end_sample, py_data))) {
+				srd_exception_catch("Calling %s decode(): ",
+						next_di->inst_id);
+			}
+			Py_XDECREF(py_res);
+		}
+
+		if ((cb = srd_pd_output_callback_find(di->sess, pdo->output_type))) {
+			/* Packets need converting from PyObject. */
+			if (convert_packet(di, pdata, py_data) != SRD_OK) {
 				/* An exception was already set up. */
 				break;
 			}

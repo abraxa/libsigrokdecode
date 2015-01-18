@@ -77,8 +77,15 @@ PyMODINIT_FUNC PyInit_sigrokdecode(void)
 		return NULL;
 	if (PyModule_AddIntConstant(mod, "OUTPUT_META", SRD_OUTPUT_META) == -1)
 		return NULL;
+	if (PyModule_AddIntConstant(mod, "OUTPUT_PACKET", SRD_OUTPUT_PACKET) == -1)
+		return NULL;
 	/* Expose meta input symbols. */
 	if (PyModule_AddIntConstant(mod, "SRD_CONF_SAMPLERATE", SRD_CONF_SAMPLERATE) == -1)
+		return NULL;
+	/* Expose packet output symbols. */
+	if (PyModule_AddIntConstant(mod, "SRD_PACKET_LOCATION", SRD_PACKET_LOCATION) == -1)
+		return NULL;
+	if (PyModule_AddIntConstant(mod, "SRD_PACKET_FIELD", SRD_PACKET_FIELD) == -1)
 		return NULL;
 
 	mod_sigrokdecode = mod;
